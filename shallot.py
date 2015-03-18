@@ -93,6 +93,7 @@ def pprint_privkey(privkey):
 #### Worker thread generates keys, hashes, and checks for patterns ####
 def worker(regex, results, trials, kill):
     RE = re.compile(regex)
+    search = RE.search
     i = 0
     while True:
         p = find_prime()
@@ -108,7 +109,7 @@ def worker(regex, results, trials, kill):
             if gmpy2.gcd(tot, e) == 1:
                 i += 1
                 onion = make_onion(n, e)
-                if RE.match(onion):
+                if search(onion):
                     d = gmpy2.invert(e, tot)
                     priv = private_key(n, e, d, p, q)
                     results.put((onion, priv))
