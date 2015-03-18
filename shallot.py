@@ -90,79 +90,86 @@ def pprint_privkey(privkey):
         print chunk
     print '-'*5 + 'END RSA PRIVATE KEY' + '-'*5
 
-#### Worker thread generates keys, hashes, and checks for patterns ####
-def worker(regex, results, trials, kill):
-    RE = re.compile(regex)
-    search = RE.search
-    i = 0
-    while True:
-        p = find_prime()
-        q = find_prime()
-        if q > p:
-            p, q = q, p
-        n = good_pair(p, q)
-        if not n:
-            continue
-        tot = n - (p + q - 1)
-        e = EMIN
-        while e < EMAX:
-            if gmpy2.gcd(tot, e) == 1:
+#### Worker process generates keys, hashes, and checks for patterns ####
+class Worker(multiprocessing.Process):
+
+    def __init__(self, regex, results, trials, kill, *args, **kwds):
+        multiprocessing.Process.__init__(self, *args, **kwds)
+        self.regex = regex
+        self.results = results
+        self.trials = trials
+        self.kill = kill
+
+    def run(self):
+        pattern = re.compile(self.regex)
+        search = pattern.search
+        i = 0
+        while True:
+            p = find_prime()
+            q = find_prime()
+            if q > p:
+                p, q = q, p
+            n = good_pair(p, q)
+            if not n:
+                continue
+            tot = n - (p + q - 1)
+            e = EMIN
+            while e < EMAX:
+                if self.kill.is_set():
+                    self.trials.put(i)
+                    return
                 i += 1
                 onion = make_onion(n, e)
-                if search(onion):
+                if search(onion) and gmpy2.gcd(e, tot)==1:
                     d = gmpy2.invert(e, tot)
                     priv = private_key(n, e, d, p, q)
-                    results.put((onion, priv))
-                    trials.put(i)
+                    self.results.put(onion+priv)
+                    self.trials.put(i)
+                    self.kill.set()
                     return
-            e += 2
-        try:
-            kill.get(False)
-        except QueueEmpty:
-            pass
-        else:
-            trials.put(i)
-            return
+                e += 2
 
-#### Main thread ####
-def main(pattern):
-    processes = []
-    results = multiprocessing.Queue()
-    kill = multiprocessing.Queue()
-    trials = multiprocessing.Queue()
-    for i in range(multiprocessing.cpu_count()):
-        processes.append(
-            multiprocessing.Process(
-                target=worker,
-                args=(pattern, results, trials, kill)
-                )
-            )
-        processes[-1].start()
-    try:
-        found = results.get()
-    except KeyboardInterrupt:
-        for i in range(len(processes)):
-            kill.put('STOP')
-        for p in processes:
-            p.join()
-        sum_trials = 0
-        for i in range(len(processes)):
-            sum_trials += trials.get()
-        print 'Tried', sum_trials, 'public keys before exit'
-        sys.exit(1)
+def kill_procs(processes, results, trials, kill):
+    '''joins all processes, empties all queues, and returns sum of trials.'''
+    if not kill.is_set():
+        kill.set()
     sum_trials = 0
-    for i in range(multiprocessing.cpu_count()):
-        kill.put('STOP')
+    while not trials.empty():
         sum_trials += trials.get()
     for proc in processes:
         proc.join()
-    onion = found[0]
-    privkey = found[1]
+    while not results.empty():
+        results.get()
+    return sum_trials
+
+#### Main thread ####
+def main(pattern):
+    results = multiprocessing.Queue()
+    trials = multiprocessing.Queue()
+    kill = multiprocessing.Event()
+    processes = []
+    for i in range(multiprocessing.cpu_count()):
+        processes.append(Worker(pattern, results, trials, kill))
+        processes[-1].start()
+    try:
+        while True:
+            try:
+                found = results.get(True, 0.1)
+            except QueueEmpty:
+                pass
+            else:
+                break
+    except KeyboardInterrupt:
+        sum_trials = kill_procs(processes, results, trials, kill)
+        print 'Tried', sum_trials, 'public keys before exit'
+        sys.exit(1)
+    sum_trials = kill_procs(processes, results, trials, kill)
+    onion = found[:22]
+    privkey = found[22:]
     print '-'*64
     print 'Found matching pattern after', sum_trials, 'tries:', onion
     print '-'*64
     pprint_privkey(privkey)
-
 
 if __name__ == '__main__':
     try:
