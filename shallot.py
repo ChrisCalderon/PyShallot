@@ -16,8 +16,7 @@ EMAX = 0xFFFFFFFFFF
 #### Prime finding stuff for RSA ####
 def random(bytez):
     '''Produces a random number thats has bytez*8 amount of bits.'''
-    seed = reduce(lambda a, b: (a << 8)|ord(b), os.urandom(bytez), 0)
-    return gmpy2.mpz_urandomb(gmpy2.random_state(seed), bytez*8)
+    return gmpy2.mpz(reduce(lambda a, b: (a << 8)|ord(b), os.urandom(bytez), 0))
 
 def good_prime(p):
     '''True if highly probably prime, else false.'''
